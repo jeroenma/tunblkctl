@@ -1,0 +1,310 @@
+#!/bin/ksh 
+
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+
+typeset -u UPPER_NAME
+typeset -A COMMANDS
+typeset -A COMMANDS_HELP
+
+export NAME="${0##*/}" ;# get base $0
+export UPPER_NAME="${NAME}"
+export SCRIPT_FULL="${.sh.file}"
+export RUN_SCRIPT_DIR="${.sh.file%/*}"
+export SCRIPT_DIR="$(dirname $(readlink -f ${.sh.file%}))"
+
+export LC_ALL=C
+export LANG=C
+
+typeset -i WAIT_TO_FINISH
+typeset -i VERBOSE
+typeset -i DEBUG
+typeset -i PROMPT
+typeset -i SINGLE_COLUMN
+typeset -i WAIT_TO_FINISH
+typeset -i TUNBLKCTL_SI_MODE
+typeset -i DIVIDER_SI_MODE
+typeset -i ONLY_SHOW_CONNECTED
+
+
+export VERBOSE=${VERBOSE:=0}
+export DEBUG=${DEBUG:=0}
+export PROMPT=${PROMPT:=1}
+export SINGLE_COLUMN=${SINGLE_COLUMN:=0}
+export WAIT_TO_FINISH=${WAIT_TO_FINISH:=0}
+export TUNBLKCTL_SI_MODE=${TUNBLKCTL_SI_MODE:=1}
+export ONLY_SHOW_CONNECTED=${ONLY_SHOW_CONNECTED:=0}
+
+export DIVIDER_SI_MODE=$([[ "${TUNBLKCTL_SI_MODE}" == "1" ]] && print -- 1000 || print -- 1024)
+
+if [[ -v "${UPPER_NAME}_LIBDIR" ]] ; then
+  LIB_DIR="TODO -- uitzoeken"
+else
+  LIB_DIR="$( print -- "${SCRIPT_DIR}/../libexec" )"
+fi
+
+#------------------------------------------------------------------------------
+# Functions - generic
+#------------------------------------------------------------------------------
+
+function print_debug {
+  if (( DEBUG != 0 )) ; then
+    print -u2 -- "debug: $*"
+  fi
+}
+
+function print_verbose {
+  if (( VERBOSE != 0 )) ; then
+    print -u2 -- "info : $*"
+  fi
+}
+
+function print_error {
+  print -u2 -- "error: $*"
+}
+
+function osascript {
+  script_name="${LIB_DIR}/${1}.applescript"
+  shift
+
+  if [ -f "${script_name}" ] ; then
+    /usr/bin/osascript "${script_name}" "${@}" 2>&1
+    return ${?}
+  fi
+  return 99
+}
+
+function osascript_quiet {
+  command="${1}"
+  shift
+
+  osascript "${command}" ${@} 1>&2
+  return ${?}
+}
+
+function getTunnelblickId {
+  #if ! /usr/bin/osascript "${LIB_DIR}/bundleid.applescript" >&- ; then
+  if ! osascript bundleid ; then
+    print -u 2 "Error: Can't get Tunnelblick ID."
+    return 1
+  fi
+  return 0
+}
+
+function tunnelblickIsRunning {
+  running="$(osascript isrunning)"
+  if [ "${running}" == "false" ] ; then
+      return 1
+  fi
+  return 0
+}
+
+#------------------------------------------------------------------------------
+# Commands - definiton and functions
+#------------------------------------------------------------------------------
+
+COMMANDS["l"]="list"
+COMMANDS_HELP["list"]="Lists all configurations"
+function command_list {
+  if (( SINGLE_COLUMN == 0 )) ; then
+    osascript list | column
+  else
+    osascript list
+  fi
+}
+
+COMMANDS["stat"]="status"
+COMMANDS_HELP["status"]="Shows status of all configurations"
+function command_status {
+  if tunnelblickIsRunning ; then
+    awk '
+    BEGIN {
+      printf("%-40s %-10s %-8s %-8s %-4s\n","VPN","STATUS","IN","OUT","AUTO")
+      printf("%-40s %-10s %-8s %-8s %-4s\n","----------------------------------------","----------","--------","--------","----")
+    }
+    '
+    osascript status | \
+    awk -F '\t' -v div="${DIVIDER_SI_MODE}" -v only_show_connected="${ONLY_SHOW_CONNECTED}" '
+    function numfmt0(n, u) {
+      if (n < div || length(u) == 1)
+        return sprintf("%.2f%s", n, substr(u, 1, 1));
+
+      return numfmt0(n / div, substr(u, 2));
+    }
+
+    function numfmt(n) {
+      if (n ~ /^[0-9]+$/)
+        return numfmt0(n, "BKMGTPEZY");
+
+      return n;
+    }
+
+    function bytes_col(n) {
+      return n > 1 ? numfmt(n) : n;
+    }
+
+    {
+      if( only_show_connected == 1 ) {
+        if( $2 == "CONNECTED" ) {
+          printf("%-40s %-10s %8s %8s %-4s\n",$1,$2,bytes_col($3),bytes_col($4),$5)
+        }
+      } else {
+        printf("%-40s %-10s %8s %8s %-4s\n",$1,$2,bytes_col($3),bytes_col($4),$5)
+      }
+    }
+    '
+  fi
+}
+
+COMMANDS["c"]="connect"
+COMMANDS_HELP["connect"]="Initates VPN connection with configuration"
+function command_connect {
+  profile="${1}"
+
+  osascript_quiet connect "${profile}"
+
+  if (( WAIT_TO_FINISH == 1 )) ; then
+    osascript_quiet await "${profile}"
+  fi
+}
+
+COMMANDS["d"]="disconnect"
+COMMANDS_HELP["disconnect"]="Disconnect VPN connection"
+function command_disconnect {
+  profile="${1}"
+
+  if [[ "${profile}" == "" ]] ; then
+    osascript_quiet disconnect-all
+  else
+    osascript_quiet disconnect "${profile}"
+  fi
+
+  if (( WAIT_TO_FINISH == 1 )) ; then
+    osascript_quiet await "${profile}"
+  fi
+}
+
+COMMANDS["star"]="start"
+COMMANDS_HELP["start"]="Start Tunnelblick process"
+function command_start {
+  if tunnelblickIsRunning ; then
+    print_error "Tunnelblick is already running"
+    exit 11
+  else
+    osascript_quiet activate
+  fi
+}
+
+COMMANDS["sto"]="stop"
+COMMANDS_HELP["stop"]="Stops Tunnelblick process, same as \aquit\a"
+function command_stop {
+  if tunnelblickIsRunning ; then
+    print_verbose "Stopping Tunnelblick..."
+    osascript_quiet quit
+    exit 0
+  else
+    print_verbose "Tunnelblick is not running"
+    exit 10
+  fi
+}
+
+COMMANDS["q"]="quit"
+COMMANDS_HELP["quit"]="Stops Tunnelblick process, same as \astop\a"
+function command_quit {
+   command_stop
+}
+
+COMMANDS["h"]="help"
+COMMANDS_HELP["help"]="Shows help information, \adefault\a when no command is given."
+function command_help {
+  print -- "HELP"
+}
+
+
+function list4help_commands {
+
+  for cmd in "${!COMMANDS[@]}" ; do
+    cmd_long="${COMMANDS[$cmd]}"
+    cmd_help="${COMMANDS_HELP[$cmd_long]}"
+    print -- "[+${cmd},${cmd_long}?${cmd_help}]"
+  done
+}
+
+#------------------------------------------------------------------------------
+# Main
+#------------------------------------------------------------------------------
+
+#USAGE=$'-?\n'
+USAGE=$'[-?\n@(#)$Id: 0.1jm (Tunnelblick commandline tool)]'
+USAGE+='[-author?Jeroen Maatman ]'
+USAGE+='[-copyright?Copyright (c) 2024 Jeroen Maatman]'
+USAGE+='[-license?MIT license]'
+USAGE+="[+NAME?${NAME} - Tunnelblick controler]"
+USAGE+='[+DESCRIPTION?This script controls Tunnelblick from command line. '
+USAGE+='I do not want to start OpenVPN directly, but quick start stop of '
+USAGE+=' VPN sessions are nice to have. Based on https://github.com/azhuchkov/tunblkctl]'
+USAGE+='[1?single column.]'
+USAGE+='[w:wait?Wait for command to end.]'
+USAGE+='[f?Follow, same as wait.]'
+USAGE+='[c?connected, only show connected sessions.]'
+USAGE+='[d:debug?Run script in debug modus.]'
+USAGE+='[v:verbose?Make script more verbose.]'
+USAGE+=$'[+COMMANDS?]{\flist4help_commands\f}'
+USAGE+='[+WARNING?scary things can happen.]'
+USAGE+=$'[+SEE ALSO?\asome\a(1), \athings\a(1)]'
+#USAGE+=$'\flist4help_commands\f'
+
+
+print_debug "pre getops - $*"
+
+while getopts "${USAGE}" OPTCHAR ; do
+
+  print_debug "OPTCHAR='${OPTCHAR}' OPTARG='${OPTARG}' OPTINT='${OPTINT}'"
+
+  case ${OPTCHAR} in
+  'w' | 'f' )
+    WAIT_TO_FINISH=1
+   ;;
+  '1')
+    SINGLE_COLUMN=1
+    print_debug "SINGLE_COLUMN=1, print in single column."
+   ;;
+  'c')
+    ONLY_SHOW_CONNECTED=1
+    print_debug "ONLY_SHOW_CONNECTED=1, only show connected sessions."
+   ;;
+  'v')
+    VERBOSE=1
+    print "VERBOSE=1, showing verbose messages."
+   ;;
+  'd')
+    DEBUG=1
+    print_debug "DEBUG=1, showing debug messages."
+   ;;
+  'y')
+    PROMPT=0 # Zet prompt uit
+    print_debug "PROMPT=1, disable confirmation."
+   ;;
+  esac
+done
+
+# Cleanup all options that are handled by getopts
+shift $((OPTIND-1))
+
+print_debug "post getops - $*"
+
+action="${1}"
+if [[ -n "${COMMANDS[$1]}" ]] ; then
+  action="${COMMANDS[$1]}"
+fi
+
+if typeset -f "command_${action:=help}" 2>&- >&- ; then
+  if (( ${#} > 0 )) ; then
+    shift # remove active command
+  fi
+
+  print_debug "command_${action} found, paramaters are: $*"
+
+  "command_${action}" $*
+else
+  print_error "command_${action:=help} not found"
+fi
