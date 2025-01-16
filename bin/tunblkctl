@@ -1,4 +1,7 @@
-#!/bin/ksh 
+#!/bin/ksh
+
+# On OS/X ksh93 is more up to date than bash.
+# Apple doesn't update bash because of GPL v2/v3 issues.
 
 PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
@@ -6,7 +9,7 @@ typeset -u UPPER_NAME
 typeset -A COMMANDS
 typeset -A COMMANDS_HELP
 
-export NAME="${0##*/}" ;# get base $0
+export NAME="${0##*/}" # get base $0
 export UPPER_NAME="${NAME}"
 export SCRIPT_FULL="${.sh.file}"
 export RUN_SCRIPT_DIR="${.sh.file%/*}"
@@ -29,6 +32,8 @@ typeset -i NO_COLORS
 export VERBOSE=${VERBOSE:=0}
 export DEBUG=${DEBUG:=0}
 export PROMPT=${PROMPT:=1}
+
+# These can be defined in environment with TUNBLKCTL_ prefix
 export SINGLE_COLUMN=${TUNBLKCTL_SINGLE_COLUMN:=0}
 export WAIT_TO_FINISH=${TUNBLKCTL_WAIT_TO_FINISH:=0}
 export SI_MODE=${TUNBLKCTL_SI_MODE:=0}
@@ -200,6 +205,12 @@ COMMANDS_HELP["connect"]="Initates VPN connection with configuration"
 function command_connect {
   profile="${1}"
 
+  if tunnelblickIsRunning ; then
+    print_verbose "Tunnelblick is already running"
+  else
+    command_start
+  fi
+
   osascript_quiet connect "${profile}"
 
   if (( WAIT_TO_FINISH == 1 )) ; then
@@ -230,6 +241,7 @@ function command_start {
     print_error "Tunnelblick is already running"
     exit 11
   else
+    print_verbose "Starting Tunnelblick..."
     osascript_quiet activate
   fi
 }
@@ -238,11 +250,13 @@ COMMANDS["sto"]="stop"
 COMMANDS_HELP["stop"]="Stops Tunnelblick process, same as \aquit\a"
 function command_stop {
   if tunnelblickIsRunning ; then
+    command_disconnect "" # TODO
+
     print_verbose "Stopping Tunnelblick..."
     osascript_quiet quit
     exit 0
   else
-    print_verbose "Tunnelblick is not running"
+    print_error "Tunnelblick is not running"
     exit 10
   fi
 }
@@ -274,9 +288,9 @@ function list4help_commands {
 #------------------------------------------------------------------------------
 
 #USAGE=$'-?\n'
-USAGE=$'[-?\n@(#)$Id: 0.1jm (Tunnelblick commandline tool)]'
-USAGE+='[-author?Jeroen Maatman ]'
-USAGE+='[-copyright?Copyright (c) 2024 Jeroen Maatman]'
+USAGE=$'[-?\n@(#)$Id: 0.5jm (Tunnelblick commandline tool)]'
+USAGE+='[-author?Jeroen Maatman, Andrey Zhuchkov]'
+USAGE+='[-copyright?Copyright (c) 2025 Jeroen Maatman]'
 USAGE+='[-license?MIT license]'
 USAGE+="[+NAME?${NAME} - Tunnelblick controler]"
 USAGE+='[+DESCRIPTION?This script controls Tunnelblick from command line. '
@@ -357,5 +371,7 @@ if typeset -f "command_${action:=help}" 2>&- >&- ; then
 
   "command_${action}" $*
 else
-  print_error "command_${action:=help} not found"
+  print_debug "command_${action:=help} not found"
+  print_error "Unknown action: '${action}'"
+  exit 1
 fi
