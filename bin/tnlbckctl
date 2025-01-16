@@ -21,20 +21,19 @@ typeset -i DEBUG
 typeset -i PROMPT
 typeset -i SINGLE_COLUMN
 typeset -i WAIT_TO_FINISH
-typeset -i TUNBLKCTL_SI_MODE
-typeset -i DIVIDER_SI_MODE
+typeset -i SI_MODE
 typeset -i ONLY_SHOW_CONNECTED
+typeset -i NO_COLORS
 
 
 export VERBOSE=${VERBOSE:=0}
 export DEBUG=${DEBUG:=0}
 export PROMPT=${PROMPT:=1}
-export SINGLE_COLUMN=${SINGLE_COLUMN:=0}
-export WAIT_TO_FINISH=${WAIT_TO_FINISH:=0}
-export TUNBLKCTL_SI_MODE=${TUNBLKCTL_SI_MODE:=1}
-export ONLY_SHOW_CONNECTED=${ONLY_SHOW_CONNECTED:=0}
-
-export DIVIDER_SI_MODE=$([[ "${TUNBLKCTL_SI_MODE}" == "1" ]] && print -- 1000 || print -- 1024)
+export SINGLE_COLUMN=${TUNBLKCTL_SINGLE_COLUMN:=0}
+export WAIT_TO_FINISH=${TUNBLKCTL_WAIT_TO_FINISH:=0}
+export SI_MODE=${TUNBLKCTL_SI_MODE:=0}
+export ONLY_SHOW_CONNECTED=${TUNBLKCTL_ONLY_SHOW_CONNECTED:=0}
+export NO_COLORS=${TUNBLKCTL_NO_COLORS:=0}
 
 if [[ -v "${UPPER_NAME}_LIBDIR" ]] ; then
   LIB_DIR="TODO -- uitzoeken"
@@ -116,14 +115,32 @@ COMMANDS["stat"]="status"
 COMMANDS_HELP["status"]="Shows status of all configurations"
 function command_status {
   if tunnelblickIsRunning ; then
-    awk '
-    BEGIN {
-      printf("%-40s %-10s %-8s %-8s %-4s\n","VPN","STATUS","IN","OUT","AUTO")
-      printf("%-40s %-10s %-8s %-8s %-4s\n","----------------------------------------","----------","--------","--------","----")
-    }
-    '
     osascript status | \
-    awk -F '\t' -v div="${DIVIDER_SI_MODE}" -v only_show_connected="${ONLY_SHOW_CONNECTED}" '
+    awk -F '\t' \
+        -v si_mode="${SI_MODE:=0}" \
+        -v only_show_connected="${ONLY_SHOW_CONNECTED:=0}" \
+        -v no_colors="${NO_COLORS:=0}" \
+    '
+    BEGIN {
+      if( no_colors != 0 ) {
+        green="";
+        yellow="";
+        reset="";
+      } else {
+        green="\033[32m";
+        yellow="\033[33m";
+        reset="\033[00m";
+      }
+
+      if( si_mode != 0 )
+        div=1000
+      else
+        div=1024
+
+      printf("%-40s  %-10s %-8s %-8s %-4s\n","VPN","STATUS","IN","OUT","AUTO");
+      printf("%-40s  %-10s %-8s %-8s %-4s\n","----------------------------------------","----------","--------","--------","----");
+    }
+
     function numfmt0(n, u) {
       if (n < div || length(u) == 1)
         return sprintf("%.2f%s", n, substr(u, 1, 1));
@@ -142,15 +159,38 @@ function command_status {
       return n > 1 ? numfmt(n) : n;
     }
 
-    {
-      if( only_show_connected == 1 ) {
-        if( $2 == "CONNECTED" ) {
-          printf("%-40s %-10s %8s %8s %-4s\n",$1,$2,bytes_col($3),bytes_col($4),$5)
-        }
+    NR == 1 {
+      printf("%s",reset);
+    }
+
+    NR > 1 {
+      if ($2 == "CONNECTED")
+        color = green;
+      else if ($2 == "EXITING")
+        color = reset;
+      else
+        color = yellow;
+
+      if ($5 == "START")
+        auto = "✓✓"
+      else if ($5 == "LAUNCH")
+        auto = "✓"
+      else
+        auto = "-"
+
+      if( $2 != "CONNECTED" && only_show_connected == 1 ) {
       } else {
-        printf("%-40s %-10s %8s %8s %-4s\n",$1,$2,bytes_col($3),bytes_col($4),$5)
+        printf("%s",color);
+        printf("%-40s %10s  %8s %8s %4s",$1,$2,bytes_col($3),bytes_col($4),auto);
+        printf("%s",reset);
+        printf("\n");
       }
     }
+
+    END {
+      printf("%s",reset);
+    }
+
     '
   fi
 }
@@ -216,7 +256,7 @@ function command_quit {
 COMMANDS["h"]="help"
 COMMANDS_HELP["help"]="Shows help information, \adefault\a when no command is given."
 function command_help {
-  print -- "HELP"
+  print -- "For more infomation about ${NAME}, use the --man or --html flags."
 }
 
 
@@ -248,6 +288,9 @@ USAGE+='[f?Follow, same as wait.]'
 USAGE+='[c?connected, only show connected sessions.]'
 USAGE+='[d:debug?Run script in debug modus.]'
 USAGE+='[v:verbose?Make script more verbose.]'
+USAGE+='[S:si-mode?Use 1000 divider instead of 1024. (same as environment variable "TUNBLKCTL_SI_MODE=1")]'
+USAGE+='[N:no-colors?No usage of colors. (same as environment variable "TUNBLKCTL_NO_COLORS=1")]'
+USAGE+='[h:help?Show help information.]'
 USAGE+=$'[+COMMANDS?]{\flist4help_commands\f}'
 USAGE+='[+WARNING?scary things can happen.]'
 USAGE+=$'[+SEE ALSO?\asome\a(1), \athings\a(1)]'
@@ -283,6 +326,14 @@ while getopts "${USAGE}" OPTCHAR ; do
   'y')
     PROMPT=0 # Zet prompt uit
     print_debug "PROMPT=1, disable confirmation."
+   ;;
+  'S')
+    SI_MODE=1
+    print_debug "SI_MODE=1, set SI mode."
+   ;;
+  'N')
+    NO_COLORS=1
+    print_debug "NO_COLORS=1, disable colors."
    ;;
   esac
 done
